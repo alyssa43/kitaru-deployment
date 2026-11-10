@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "evalve"
+version = "0.1.0"
+description = "Deploy a shared Kitaru server in your AWS account"
+requires-python = ">=3.11"
+
+[project.scripts]
+evalve = "evalve.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/evalve"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"infra/.terraform.lock.hcl" = "evalve/infra/.terraform.lock.hcl"
+"infra/bootstrap.sh.tftpl" = "evalve/infra/bootstrap.sh.tftpl"
+"infra/database.tf" = "evalve/infra/database.tf"
+"infra/network.tf" = "evalve/infra/network.tf"
+"infra/outputs.tf" = "evalve/infra/outputs.tf"
+"infra/refresh.py" = "evalve/infra/refresh.py"
+"infra/server.tf" = "evalve/infra/server.tf"
+"infra/variables.tf" = "evalve/infra/variables.tf"
+"infra/versions.tf" = "evalve/infra/versions.tf"
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "infra", "tests", "docs", "README.md", "pyproject.toml"]
+exclude = ["**/.terraform/**", "**/*.tfstate*", "**/*.tfvars*", "**/*.tfplan", "**/__pycache__/**"]

@@ -1,0 +1,123 @@
+#!/bin/bash
+set -eu
+umask 077
+
+# EC2 has no temporary public address. Wait for Terraform to attach the EIP
+# before using the package repositories or starting Caddy's ACME challenge.
+public_ip=''
+for attempt in $(seq 1 60); do
+  token=$(curl -fsS --max-time 2 -X PUT \
+    -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' \
+    http://169.254.169.254/latest/api/token 2>/dev/null) || token=''
+  if [ -n "$token" ]; then
+    public_ip=$(curl -fsS --max-time 2 -H "X-aws-ec2-metadata-token: $token" \
+      http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null) || public_ip=''
+    if [ "$public_ip" = '${public_ip}' ]; then
+      break
+    fi
+  fi
+  sleep 5
+done
+if [ "$public_ip" != '${public_ip}' ]; then
+  echo 'Timed out waiting for the Evalve Elastic IP.' >&2
+  exit 1
+fi
+
+dnf install -y docker python3 awscli-2
+systemctl enable --now docker amazon-ssm-agent
+install -d -m 700 /etc/evalve
+echo '${config}' | base64 -d > /etc/evalve/config.json
+echo '${refresh_script}' | base64 -d > /etc/evalve/refresh.py
+curl --fail --silent --show-error --retry 5 \
+  https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem \
+  -o /etc/evalve/rds-ca.pem
+chmod 644 /etc/evalve/rds-ca.pem
+
+cat > /etc/evalve/Caddyfile <<'CADDY'
+{
+  admin off
+}
+
+${hostname} {
+  reverse_proxy 127.0.0.1:8000
+}
+CADDY
+chmod 644 /etc/evalve/Caddyfile
+
+cat > /etc/systemd/system/evalve-kitaru.service <<'UNIT'
+[Unit]
+Description=Evalve Kitaru server
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+RuntimeDirectory=evalve
+RuntimeDirectoryMode=0700
+ExecStartPre=/usr/bin/python3 /etc/evalve/refresh.py
+ExecStartPre=-/usr/bin/docker rm -f evalve-kitaru
+ExecStart=/usr/bin/docker run --name evalve-kitaru \
+  --publish 127.0.0.1:8000:8000 \
+  --env-file /run/evalve/server.env \
+  --mount type=bind,src=/etc/evalve/rds-ca.pem,dst=/run/rds-ca.pem,readonly \
+  --log-driver local --log-opt max-size=10m --log-opt max-file=3 \
+  ${kitaru_image}
+ExecStop=/usr/bin/docker stop --time 120 evalve-kitaru
+Restart=always
+RestartSec=15
+TimeoutStopSec=150
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+cat > /etc/systemd/system/evalve-refresh.service <<'UNIT'
+[Unit]
+Description=Refresh Evalve credentials after rotation
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /etc/evalve/refresh.py --restart-if-changed
+UNIT
+
+cat > /etc/systemd/system/evalve-refresh.timer <<'UNIT'
+[Unit]
+Description=Check for updated Evalve database credentials
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=60s
+
+[Install]
+WantedBy=timers.target
+UNIT
+
+cat > /etc/systemd/system/evalve-caddy.service <<'UNIT'
+[Unit]
+Description=Evalve HTTPS reverse proxy
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+ExecStartPre=-/usr/bin/docker rm -f evalve-caddy
+ExecStart=/usr/bin/docker run --name evalve-caddy --network host \
+  --mount type=volume,src=evalve-caddy-data,dst=/data \
+  --mount type=volume,src=evalve-caddy-config,dst=/config \
+  --mount type=bind,src=/etc/evalve/Caddyfile,dst=/etc/caddy/Caddyfile,readonly \
+  --log-driver local --log-opt max-size=10m --log-opt max-file=3 \
+  ${caddy_image}
+ExecStop=/usr/bin/docker stop --time 30 evalve-caddy
+Restart=always
+RestartSec=15
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+systemctl daemon-reload
+systemctl enable --now --no-block evalve-kitaru.service evalve-refresh.timer evalve-caddy.service
