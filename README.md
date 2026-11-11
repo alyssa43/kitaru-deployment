@@ -7,7 +7,24 @@ Evalve deploys one shared Kitaru server to AWS. The operator uses the Evalve CLI
 
 ## Operator setup
 
-Install Python 3.11+, uv, AWS CLI v2, and Terraform 1.11+ in the 1.x series. From a checkout of this repository, install the development CLI and set up its AWS profile.
+Install Python 3.11+, uv, and AWS CLI v2 on your workstation.
+
+### Install Terraform
+
+Evalve requires Terraform 1.11 or newer in the 1.x series. On macOS, use Homebrew to install it.
+
+```sh
+brew tap hashicorp/tap
+brew install hashicorp/tap/terraform
+```
+
+For other installation methods, follow HashiCorp's instructions for your platform and make sure `terraform` is on your `PATH`. [HashiCorp Terraform installation guide](https://developer.hashicorp.com/terraform/install)
+
+Run `terraform version` to confirm the command works and reports a supported version.
+
+### Install Evalve and sign in to AWS
+
+From the root of your repository checkout, install the Evalve CLI and set up its AWS profile.
 
 ```sh
 uv tool install .
